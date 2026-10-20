@@ -68,7 +68,7 @@ func (r *RTTStats) MaxAckDelay() time.Duration {
 // PTO gets the probe timeout duration.
 func (r *RTTStats) PTO(includeMaxAckDelay bool) time.Duration {
 	if !r.hasMeasurement {
-		return 2 * DefaultInitialRTT
+		return 2 * r.SmoothedRTT()
 	}
 	pto := r.SmoothedRTT() + max(4*r.MeanDeviation(), protocol.TimerGranularity)
 	if includeMaxAckDelay {
@@ -131,7 +131,7 @@ func (r *RTTStats) SetInitialRTT(t time.Duration) {
 	// we might already have obtained an RTT measurement.
 	// This can happen if we received the ClientHello in multiple pieces, and one of those pieces was lost.
 	// Discard the restored value. A fresh measurement is always better.
-	if r.hasMeasurement {
+	if r.hasMeasurement || t <= 0 {
 		return
 	}
 	r.smoothedRTT.Store(int64(t))

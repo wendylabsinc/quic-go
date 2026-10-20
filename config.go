@@ -26,6 +26,9 @@ func validateConfig(config *Config) error {
 	if config == nil {
 		return nil
 	}
+	if config.InitialRTT < 0 {
+		return fmt.Errorf("invalid initial RTT: %s", config.InitialRTT)
+	}
 	if config.MaxCryptoStreamSize != 0 && (config.MaxCryptoStreamSize < 4096 || config.MaxCryptoStreamSize > quicvarint.Max) {
 		return fmt.Errorf("invalid maximum CRYPTO stream size: %d", config.MaxCryptoStreamSize)
 	}
@@ -115,6 +118,7 @@ func populateConfig(config *Config) *Config {
 	return &Config{
 		GetConfigForClient:               config.GetConfigForClient,
 		Versions:                         versions,
+		InitialRTT:                       config.InitialRTT,
 		MaxCryptoStreamSize:              maxCryptoStreamSize,
 		HandshakeIdleTimeout:             handshakeIdleTimeout,
 		MaxIdleTimeout:                   idleTimeout,

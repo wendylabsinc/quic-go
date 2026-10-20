@@ -98,6 +98,8 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(&protocol.DefaultConnectionIDGenerator{ConnLen: protocol.DefaultConnectionIDLength}))
 		case "HandshakeIdleTimeout":
 			f.Set(reflect.ValueOf(time.Second))
+		case "InitialRTT":
+			f.Set(reflect.ValueOf(time.Second))
 		case "MaxIdleTimeout":
 			f.Set(reflect.ValueOf(time.Hour))
 		case "TokenStore":

@@ -106,6 +106,10 @@ type Config struct {
 	// The QUIC versions that can be negotiated.
 	// If not set, it uses all versions available.
 	Versions []Version
+	// InitialRTT estimates the round-trip time before a measured sample is
+	// available. Zero retains the upstream 100ms default. A real measurement
+	// replaces this estimate, so it is not a minimum RTT or a timeout budget.
+	InitialRTT time.Duration
 	// MaxCryptoStreamSize is the maximum permitted end offset of received CRYPTO
 	// data at each encryption level (Initial, Handshake and 1-RTT), including data
 	// already consumed by TLS. It is not a flow-control window or a preallocation.
