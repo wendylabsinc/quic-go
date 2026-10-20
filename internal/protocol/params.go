@@ -83,7 +83,7 @@ const MinStreamFrameBufferSize = 128
 // If a packet has less than this number of bytes, we won't coalesce any more packets onto it.
 const MinCoalescedPacketSize = 128
 
-// MaxCryptoStreamOffset is the maximum offset allowed on any of the crypto streams.
+// MaxCryptoStreamOffset is the default maximum offset allowed on a crypto stream.
 // This limits the size of the ClientHello and Certificates that can be received.
 const MaxCryptoStreamOffset = 16 * (1 << 10)
 

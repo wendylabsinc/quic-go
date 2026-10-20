@@ -38,8 +38,8 @@ type testPacketPacker struct {
 func newTestPacketPacker(t *testing.T, mockCtrl *gomock.Controller, pers protocol.Perspective) *testPacketPacker {
 	destConnID := protocol.ParseConnectionID([]byte{1, 2, 3, 4})
 	require.Equal(t, testPackerConnIDLen, destConnID.Len())
-	initialStream := newInitialCryptoStream(pers == protocol.PerspectiveClient)
-	handshakeStream := newCryptoStream()
+	initialStream := newInitialCryptoStream(pers == protocol.PerspectiveClient, protocol.MaxCryptoStreamOffset)
+	handshakeStream := newCryptoStream(protocol.MaxCryptoStreamOffset)
 	pnManager := mockackhandler.NewMockSentPacketHandler(mockCtrl)
 	framer := NewMockFrameSource(mockCtrl)
 	ackFramer := NewMockAckFrameSource(mockCtrl)

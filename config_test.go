@@ -90,6 +90,8 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			// Can't compare functions.
 		case "Versions":
 			f.Set(reflect.ValueOf([]Version{1, 2, 3}))
+		case "MaxCryptoStreamSize":
+			f.Set(reflect.ValueOf(uint64(64 << 10)))
 		case "ConnectionIDLength":
 			f.Set(reflect.ValueOf(8))
 		case "ConnectionIDGenerator":
@@ -176,6 +178,7 @@ func TestConfigDefaultValues(t *testing.T) {
 	// if not set, some fields use default values
 	c = populateConfig(&Config{})
 	require.Equal(t, protocol.SupportedVersions, c.Versions)
+	require.EqualValues(t, protocol.MaxCryptoStreamOffset, c.MaxCryptoStreamSize)
 	require.Equal(t, protocol.DefaultHandshakeIdleTimeout, c.HandshakeIdleTimeout)
 	require.Equal(t, protocol.DefaultIdleTimeout, c.MaxIdleTimeout)
 	require.EqualValues(t, protocol.DefaultInitialMaxStreamData, c.InitialStreamReceiveWindow)

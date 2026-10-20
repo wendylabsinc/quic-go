@@ -274,7 +274,7 @@ var newConnection = func(
 		handshakeDestConnID: destConnID,
 		srcConnIDLen:        srcConnID.Len(),
 		tokenGenerator:      tokenGenerator,
-		oneRTTStream:        newCryptoStream(),
+		oneRTTStream:        newCryptoStream(protocol.ByteCount(conf.MaxCryptoStreamSize)),
 		perspective:         protocol.PerspectiveServer,
 		qlogTrace:           qlogTrace,
 		logger:              logger,
@@ -451,7 +451,7 @@ var newClientConnection = func(
 		s.logger,
 	)
 	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
-	oneRTTStream := newCryptoStream()
+	oneRTTStream := newCryptoStream(protocol.ByteCount(s.config.MaxCryptoStreamSize))
 	params := &wire.TransportParameters{
 		InitialMaxStreamDataBidiRemote: protocol.ByteCount(s.config.InitialStreamReceiveWindow),
 		InitialMaxStreamDataBidiLocal:  protocol.ByteCount(s.config.InitialStreamReceiveWindow),
@@ -510,8 +510,8 @@ var newClientConnection = func(
 
 func (c *Conn) preSetup() {
 	c.largestRcvdAppData = protocol.InvalidPacketNumber
-	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient)
-	c.handshakeStream = newCryptoStream()
+	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient, protocol.ByteCount(c.config.MaxCryptoStreamSize))
+	c.handshakeStream = newCryptoStream(protocol.ByteCount(c.config.MaxCryptoStreamSize))
 	c.sendQueue = newSendQueue(c.conn)
 	c.retransmissionQueue = newRetransmissionQueue()
 	c.frameParser = *wire.NewFrameParser(

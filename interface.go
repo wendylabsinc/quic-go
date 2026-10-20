@@ -106,6 +106,13 @@ type Config struct {
 	// The QUIC versions that can be negotiated.
 	// If not set, it uses all versions available.
 	Versions []Version
+	// MaxCryptoStreamSize is the maximum permitted end offset of received CRYPTO
+	// data at each encryption level (Initial, Handshake and 1-RTT), including data
+	// already consumed by TLS. It is not a flow-control window or a preallocation.
+	// Exceeding it closes the connection with CRYPTO_BUFFER_EXCEEDED. Zero defaults
+	// to 16 KiB. Nonzero values must be at least 4096 bytes (RFC 9000, Section 7.5)
+	// and at most the maximum QUIC variable-length integer (2^62-1).
+	MaxCryptoStreamSize uint64
 	// HandshakeIdleTimeout is the idle timeout before completion of the handshake.
 	// If we don't receive any packet from the peer within this time, the connection attempt is aborted.
 	// Additionally, if the handshake doesn't complete in twice this time, the connection attempt is also aborted.

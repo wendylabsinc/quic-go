@@ -17,7 +17,7 @@ import (
 )
 
 func TestCryptoStreamDataAssembly(t *testing.T) {
-	str := newCryptoStream()
+	str := newCryptoStream(protocol.MaxCryptoStreamOffset)
 	require.NoError(t, str.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("bar"), Offset: 3}))
 	require.NoError(t, str.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("foo")}))
 	// receive a retransmission
@@ -35,7 +35,7 @@ func TestCryptoStreamDataAssembly(t *testing.T) {
 }
 
 func TestCryptoStreamMaxOffset(t *testing.T) {
-	str := newCryptoStream()
+	str := newCryptoStream(protocol.MaxCryptoStreamOffset)
 	require.NoError(t, str.HandleCryptoFrame(&wire.CryptoFrame{
 		Offset: protocol.MaxCryptoStreamOffset - 5,
 		Data:   []byte("foo"),
@@ -51,7 +51,7 @@ func TestCryptoStreamMaxOffset(t *testing.T) {
 
 func TestCryptoStreamFinishWithQueuedData(t *testing.T) {
 	t.Run("with data at current offset", func(t *testing.T) {
-		str := newCryptoStream()
+		str := newCryptoStream(protocol.MaxCryptoStreamOffset)
 		require.NoError(t, str.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("foo")}))
 		require.Equal(t, []byte("foo"), str.GetCryptoData())
 		require.NoError(t, str.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("bar"), Offset: 3}))
@@ -59,14 +59,14 @@ func TestCryptoStreamFinishWithQueuedData(t *testing.T) {
 	})
 
 	t.Run("with data at a higher offset", func(t *testing.T) {
-		str := newCryptoStream()
+		str := newCryptoStream(protocol.MaxCryptoStreamOffset)
 		require.NoError(t, str.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("foobar"), Offset: 20}))
 		require.ErrorIs(t, str.Finish(), &qerr.TransportError{ErrorCode: qerr.ProtocolViolation})
 	})
 }
 
 func TestCryptoStreamReceiveDataAfterFinish(t *testing.T) {
-	str := newCryptoStream()
+	str := newCryptoStream(protocol.MaxCryptoStreamOffset)
 	require.NoError(t, str.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("foobar")}))
 	require.Equal(t, []byte("foobar"), str.GetCryptoData())
 	require.NoError(t, str.Finish())
@@ -85,7 +85,7 @@ func expectedCryptoFrameLen(offset protocol.ByteCount) protocol.ByteCount {
 }
 
 func TestCryptoStreamWrite(t *testing.T) {
-	str := newCryptoStream()
+	str := newCryptoStream(protocol.MaxCryptoStreamOffset)
 
 	require.False(t, str.HasData())
 	_, err := str.Write([]byte("foo"))
@@ -113,7 +113,7 @@ func TestCryptoStreamWrite(t *testing.T) {
 }
 
 func TestInitialCryptoStreamServer(t *testing.T) {
-	str := newInitialCryptoStream(false)
+	str := newInitialCryptoStream(false, protocol.MaxCryptoStreamOffset)
 	_, err := str.Write([]byte("foobar"))
 	require.NoError(t, err)
 
@@ -156,7 +156,7 @@ func skipIfDisableScramblingEnvSet(t *testing.T) {
 func TestInitialCryptoStreamClientStatic(t *testing.T) {
 	skipIfDisableScramblingEnvSet(t)
 
-	str := newInitialCryptoStream(true)
+	str := newInitialCryptoStream(true, protocol.MaxCryptoStreamOffset)
 	clientHello, err := getClientHello("quic-go.net")
 	require.NoError(t, err)
 	_, err = str.Write(clientHello)
@@ -238,7 +238,7 @@ func TestInitialCryptoStreamClientRandomizedSizes(t *testing.T) {
 }
 
 func testInitialCryptoStreamClientRandomizedSizes(t *testing.T, clientHello []byte, expectedServerName string) {
-	str := newInitialCryptoStream(true)
+	str := newInitialCryptoStream(true, protocol.MaxCryptoStreamOffset)
 
 	b := slices.Clone(clientHello)
 	for len(b) > 0 {

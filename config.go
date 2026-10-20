@@ -26,6 +26,9 @@ func validateConfig(config *Config) error {
 	if config == nil {
 		return nil
 	}
+	if config.MaxCryptoStreamSize != 0 && (config.MaxCryptoStreamSize < 4096 || config.MaxCryptoStreamSize > quicvarint.Max) {
+		return fmt.Errorf("invalid maximum CRYPTO stream size: %d", config.MaxCryptoStreamSize)
+	}
 	const maxStreams = 1 << 60
 	if config.MaxIncomingStreams > maxStreams {
 		config.MaxIncomingStreams = maxStreams
@@ -63,6 +66,10 @@ func populateConfig(config *Config) *Config {
 	versions := config.Versions
 	if len(versions) == 0 {
 		versions = protocol.SupportedVersions
+	}
+	maxCryptoStreamSize := config.MaxCryptoStreamSize
+	if maxCryptoStreamSize == 0 {
+		maxCryptoStreamSize = protocol.MaxCryptoStreamOffset
 	}
 	handshakeIdleTimeout := protocol.DefaultHandshakeIdleTimeout
 	if config.HandshakeIdleTimeout != 0 {
@@ -108,6 +115,7 @@ func populateConfig(config *Config) *Config {
 	return &Config{
 		GetConfigForClient:               config.GetConfigForClient,
 		Versions:                         versions,
+		MaxCryptoStreamSize:              maxCryptoStreamSize,
 		HandshakeIdleTimeout:             handshakeIdleTimeout,
 		MaxIdleTimeout:                   idleTimeout,
 		KeepAlivePeriod:                  config.KeepAlivePeriod,

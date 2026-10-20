@@ -18,7 +18,8 @@ const disableClientHelloScramblingEnv = "QUIC_GO_DISABLE_CLIENTHELLO_SCRAMBLING"
 // The baseCryptoStream is used by the cryptoStream and the initialCryptoStream.
 // This allows us to implement different logic for PopCryptoFrame for the two streams.
 type baseCryptoStream struct {
-	queue frameSorter
+	queue     frameSorter
+	maxOffset protocol.ByteCount
 
 	highestOffset protocol.ByteCount
 	finished      bool
@@ -27,16 +28,16 @@ type baseCryptoStream struct {
 	writeBuf    []byte
 }
 
-func newCryptoStream() *cryptoStream {
-	return &cryptoStream{baseCryptoStream{queue: *newFrameSorter()}}
+func newCryptoStream(maxOffset protocol.ByteCount) *cryptoStream {
+	return &cryptoStream{baseCryptoStream{queue: *newFrameSorter(), maxOffset: maxOffset}}
 }
 
 func (s *baseCryptoStream) HandleCryptoFrame(f *wire.CryptoFrame) error {
 	highestOffset := f.Offset + protocol.ByteCount(len(f.Data))
-	if maxOffset := highestOffset; maxOffset > protocol.MaxCryptoStreamOffset {
+	if maxOffset := highestOffset; maxOffset > s.maxOffset {
 		return &qerr.TransportError{
 			ErrorCode:    qerr.CryptoBufferExceeded,
-			ErrorMessage: fmt.Sprintf("received invalid offset %d on crypto stream, maximum allowed %d", maxOffset, protocol.MaxCryptoStreamOffset),
+			ErrorMessage: fmt.Sprintf("received invalid offset %d on crypto stream, maximum allowed %d", maxOffset, s.maxOffset),
 		}
 	}
 	if s.finished {
@@ -111,14 +112,14 @@ type initialCryptoStream struct {
 	cuts     [2]clientHelloCut
 }
 
-func newInitialCryptoStream(isClient bool) *initialCryptoStream {
+func newInitialCryptoStream(isClient bool, maxOffset protocol.ByteCount) *initialCryptoStream {
 	var scramble bool
 	if isClient {
 		disabled, err := strconv.ParseBool(os.Getenv(disableClientHelloScramblingEnv))
 		scramble = err != nil || !disabled
 	}
 	s := &initialCryptoStream{
-		baseCryptoStream: baseCryptoStream{queue: *newFrameSorter()},
+		baseCryptoStream: baseCryptoStream{queue: *newFrameSorter(), maxOffset: maxOffset},
 		scramble:         scramble,
 	}
 	for i := range len(s.cuts) {

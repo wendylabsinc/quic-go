@@ -22,9 +22,9 @@ func TestCryptoStreamManager(t *testing.T) {
 }
 
 func testCryptoStreamManager(t *testing.T, encLevel protocol.EncryptionLevel) {
-	initialStream := newInitialCryptoStream(true)
-	handshakeStream := newCryptoStream()
-	oneRTTStream := newCryptoStream()
+	initialStream := newInitialCryptoStream(true, protocol.MaxCryptoStreamOffset)
+	handshakeStream := newCryptoStream(protocol.MaxCryptoStreamOffset)
+	oneRTTStream := newCryptoStream(protocol.MaxCryptoStreamOffset)
 	csm := newCryptoStreamManager(initialStream, handshakeStream, oneRTTStream)
 
 	require.NoError(t, csm.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("foo")}, encLevel))
@@ -58,9 +58,9 @@ func TestCryptoStreamManagerFinishEncryptionLevel(t *testing.T) {
 }
 
 func testCryptoStreamManagerFinishEncryptionLevel(t *testing.T, encLevel protocol.EncryptionLevel) {
-	initialStream := newInitialCryptoStream(true)
-	handshakeStream := newCryptoStream()
-	oneRTTStream := newCryptoStream()
+	initialStream := newInitialCryptoStream(true, protocol.MaxCryptoStreamOffset)
+	handshakeStream := newCryptoStream(protocol.MaxCryptoStreamOffset)
+	oneRTTStream := newCryptoStream(protocol.MaxCryptoStreamOffset)
 	csm := newCryptoStreamManager(initialStream, handshakeStream, oneRTTStream)
 
 	require.NoError(t, csm.HandleCryptoFrame(&wire.CryptoFrame{Data: []byte("foo")}, encLevel))
@@ -71,9 +71,9 @@ func testCryptoStreamManagerFinishEncryptionLevel(t *testing.T, encLevel protoco
 }
 
 func TestCryptoStreamManagerPostHandshake(t *testing.T) {
-	initialStream := newInitialCryptoStream(true)
-	handshakeStream := newCryptoStream()
-	oneRTTStream := newCryptoStream()
+	initialStream := newInitialCryptoStream(true, protocol.MaxCryptoStreamOffset)
+	handshakeStream := newCryptoStream(protocol.MaxCryptoStreamOffset)
+	oneRTTStream := newCryptoStream(protocol.MaxCryptoStreamOffset)
 	csm := newCryptoStreamManager(initialStream, handshakeStream, oneRTTStream)
 
 	_, err := oneRTTStream.Write([]byte("foo"))
