@@ -23,7 +23,7 @@ copying, invalid offsets, every encryption level on both endpoint roles, large
 flight acceptance and rejection after consuming the configured limit. WendyOS
 also exercises real signed large chains and mutual authentication.
 
-Keep the two Wendy patches as separate commits on the selected upstream
+Keep the Wendy patches as separate commits on the selected upstream
 release. Rebase them onto a newer release, review the upstream delta and rerun
 dependency and WendyOS integration tests before changing the pinned revision.
 Retire this patch when upstream supports a sufficient configurable bound.
@@ -52,5 +52,28 @@ Upstream tracks the initial-estimate option in
 [#3754](https://github.com/quic-go/quic-go/issues/3754), with API lifecycle
 questions in [#3862](https://github.com/quic-go/quic-go/issues/3862). Retire the
 RTT patch when upstream exposes a suitable option and uses the estimate for
-initial recovery. Both this and the configurable certificate-flight requirement must be
-satisfied before WendyOS can return to an unmodified upstream release.
+initial recovery. The certificate-flight bound, initial RTT estimate and initial congestion-window
+requirements must be satisfied before WendyOS returns to unmodified upstream.
+
+## Configurable initial congestion window
+
+`Config.InitialCongestionWindowPackets` allows a caller to reduce the initial
+flight on a path with limited buffering. Zero preserves upstream's32-packet
+default; nonzero values must be between2 and10000 packets. The window starts
+as that multiple of the initial packet size. It is retained when resetting
+congestion control for a migrated path, using that path's initial packet size.
+Normal ACK/loss processing continues growing or reducing the window; this
+option is neither a permanent cap nor a rate limit. Client and server settings
+are independent.
+
+WendyOS is qualifying four packets for routed app sessions. A controlled
+three-hop mutual-TLS experiment with its production queues reduced median
+queue-capacity drops43→8 and setup22.002s→16.503s over three repeats. Those
+measurements are offline, with unchanged authentication, queue bounds, RTT
+seed and deadlines; hardware qualification is separate. Device-link sessions
+and other callers retain the upstream default.
+
+Tests cover unchanged defaults, valid/invalid bounds, copying/population,
+client/server congestion accounting, subsequent growth and migration with a
+changed packet size. Retire this patch when upstream exposes equivalent
+initial-window configuration.

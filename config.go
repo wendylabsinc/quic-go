@@ -29,6 +29,9 @@ func validateConfig(config *Config) error {
 	if config.InitialRTT < 0 {
 		return fmt.Errorf("invalid initial RTT: %s", config.InitialRTT)
 	}
+	if config.InitialCongestionWindowPackets != 0 && (config.InitialCongestionWindowPackets < 2 || config.InitialCongestionWindowPackets > protocol.MaxCongestionWindowPackets) {
+		return fmt.Errorf("invalid initial congestion window: %d packets", config.InitialCongestionWindowPackets)
+	}
 	if config.MaxCryptoStreamSize != 0 && (config.MaxCryptoStreamSize < 4096 || config.MaxCryptoStreamSize > quicvarint.Max) {
 		return fmt.Errorf("invalid maximum CRYPTO stream size: %d", config.MaxCryptoStreamSize)
 	}
@@ -67,6 +70,10 @@ func populateConfig(config *Config) *Config {
 		config = &Config{}
 	}
 	versions := config.Versions
+	initialCongestionWindowPackets := config.InitialCongestionWindowPackets
+	if initialCongestionWindowPackets == 0 {
+		initialCongestionWindowPackets = protocol.DefaultInitialCongestionWindowPackets
+	}
 	if len(versions) == 0 {
 		versions = protocol.SupportedVersions
 	}
@@ -116,6 +123,7 @@ func populateConfig(config *Config) *Config {
 	}
 
 	return &Config{
+		InitialCongestionWindowPackets:   initialCongestionWindowPackets,
 		GetConfigForClient:               config.GetConfigForClient,
 		Versions:                         versions,
 		InitialRTT:                       config.InitialRTT,

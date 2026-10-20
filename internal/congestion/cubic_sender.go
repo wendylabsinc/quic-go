@@ -17,7 +17,7 @@ const (
 	maxBurstPackets            = 3
 	renoBeta                   = 0.7 // Reno backoff factor.
 	minCongestionWindowPackets = 2
-	initialCongestionWindow    = 32
+	initialCongestionWindow    = protocol.DefaultInitialCongestionWindowPackets
 )
 
 type cubicSender struct {
@@ -72,6 +72,7 @@ func NewCubicSender(
 	rttStats *utils.RTTStats,
 	connStats *utils.ConnectionStats,
 	initialMaxDatagramSize protocol.ByteCount,
+	initialWindowPackets uint32,
 	reno bool,
 	qlogger qlogwriter.Recorder,
 ) *cubicSender {
@@ -81,7 +82,7 @@ func NewCubicSender(
 		connStats,
 		reno,
 		initialMaxDatagramSize,
-		initialCongestionWindow*initialMaxDatagramSize,
+		protocol.ByteCount(initialWindowPackets)*initialMaxDatagramSize,
 		protocol.MaxCongestionWindowPackets*initialMaxDatagramSize,
 		qlogger,
 	)

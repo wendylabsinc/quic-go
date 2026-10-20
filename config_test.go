@@ -100,6 +100,8 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(time.Second))
 		case "InitialRTT":
 			f.Set(reflect.ValueOf(time.Second))
+		case "InitialCongestionWindowPackets":
+			f.Set(reflect.ValueOf(uint32(4)))
 		case "MaxIdleTimeout":
 			f.Set(reflect.ValueOf(time.Hour))
 		case "TokenStore":
@@ -179,6 +181,7 @@ func TestConfigDefaultValues(t *testing.T) {
 
 	// if not set, some fields use default values
 	c = populateConfig(&Config{})
+	require.EqualValues(t, protocol.DefaultInitialCongestionWindowPackets, c.InitialCongestionWindowPackets)
 	require.Equal(t, protocol.SupportedVersions, c.Versions)
 	require.EqualValues(t, protocol.MaxCryptoStreamOffset, c.MaxCryptoStreamSize)
 	require.Equal(t, protocol.DefaultHandshakeIdleTimeout, c.HandshakeIdleTimeout)

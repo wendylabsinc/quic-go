@@ -110,6 +110,13 @@ type Config struct {
 	// available. Zero retains the upstream 100ms default. A real measurement
 	// replaces this estimate, so it is not a minimum RTT or a timeout budget.
 	InitialRTT time.Duration
+	// InitialCongestionWindowPackets sets the initial congestion window as a
+	// multiple of InitialPacketSize. A smaller value reduces the initial burst
+	// on paths with limited buffering. Normal congestion control subsequently
+	// grows or reduces the window; this is not a sustained sending-rate limit.
+	// Zero uses the default of 32 packets. Nonzero values must be between 2
+	// and 10000 packets. This setting applies to both clients and servers.
+	InitialCongestionWindowPackets uint32
 	// MaxCryptoStreamSize is the maximum permitted end offset of received CRYPTO
 	// data at each encryption level (Initial, Handshake and 1-RTT), including data
 	// already consumed by TLS. It is not a flow-control window or a preallocation.

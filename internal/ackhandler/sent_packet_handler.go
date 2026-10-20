@@ -89,9 +89,10 @@ type sentPacketHandler struct {
 
 	bytesInFlight protocol.ByteCount
 
-	congestion congestion.SendAlgorithmWithDebugInfos
-	rttStats   *utils.RTTStats
-	connStats  *utils.ConnectionStats
+	congestion                     congestion.SendAlgorithmWithDebugInfos
+	initialCongestionWindowPackets uint32
+	rttStats                       *utils.RTTStats
+	connStats                      *utils.ConnectionStats
 
 	// The number of times a PTO has been sent without receiving an ack.
 	ptoCount uint32
@@ -120,6 +121,7 @@ var _ SentPacketHandler = &sentPacketHandler{}
 func NewSentPacketHandler(
 	initialPN protocol.PacketNumber,
 	initialMaxDatagramSize protocol.ByteCount,
+	initialCongestionWindowPackets uint32,
 	rttStats *utils.RTTStats,
 	connStats *utils.ConnectionStats,
 	clientAddressValidated bool,
@@ -134,6 +136,7 @@ func NewSentPacketHandler(
 		rttStats,
 		connStats,
 		initialMaxDatagramSize,
+		initialCongestionWindowPackets,
 		true, // use Reno
 		qlogger,
 	)
@@ -148,6 +151,7 @@ func NewSentPacketHandler(
 		rttStats:                       rttStats,
 		connStats:                      connStats,
 		congestion:                     congestion,
+		initialCongestionWindowPackets: initialCongestionWindowPackets,
 		ignorePacketsBelow:             ignorePacketsBelow,
 		perspective:                    pers,
 		qlogger:                        qlogger,
@@ -1136,6 +1140,7 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 		h.rttStats,
 		h.connStats,
 		initialMaxDatagramSize,
+		h.initialCongestionWindowPackets,
 		true, // use Reno
 		h.qlogger,
 	)
