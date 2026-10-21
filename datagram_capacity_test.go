@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/utils"
@@ -105,19 +106,66 @@ func TestCurrentDatagramCapacityConcurrentSnapshotsAndShrink(t *testing.T) {
 	}
 	wg.Go(func() {
 		for range 1000 {
-			c.maxPayloadSizeEstimate.Store(1156)
+			c.setDatagramPathPayloadLimit(1156)
 			c.updateDatagramSendLimit(1200)
-			c.maxPayloadSizeEstimate.Store(1356)
+			c.setDatagramPathPayloadLimit(1356)
 			c.updateDatagramSendLimit(16383)
 		}
 	})
 	wg.Wait()
 	old, err := c.CurrentMaxDatagramPayloadSize()
 	require.NoError(t, err)
-	c.maxPayloadSizeEstimate.Store(1156)
+	c.setDatagramPathPayloadLimit(1156)
 	var sizeErr *DatagramTooLargeError
 	require.ErrorAs(t, c.TrySendDatagram(make([]byte, old)), &sizeErr)
 	require.EqualValues(t, 1156, sizeErr.MaxDatagramPayloadSize)
 	require.NoError(t, c.TrySendDatagram(make([]byte, 1100)))
 	require.NoError(t, c.TrySendDatagram(nil))
+}
+
+func TestBlockedDatagramSendRejectsPathShrink(t *testing.T) {
+	c := readyCapacityConn(16383, 1356)
+	for range maxDatagramSendQueueLen {
+		require.NoError(t, c.TrySendDatagram(make([]byte, 1350)))
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.SendDatagram(make([]byte, 1350)) }()
+	require.Eventually(t, func() bool {
+		c.datagramQueue.sendMx.Lock()
+		defer c.datagramQueue.sendMx.Unlock()
+		return c.datagramQueue.sendWaiters == 1
+	}, time.Second, time.Millisecond)
+	// Match migration publication without freeing a queue slot.
+	c.setDatagramPathPayloadLimit(1156)
+	select {
+	case err := <-done:
+		var sizeErr *DatagramTooLargeError
+		require.ErrorAs(t, err, &sizeErr)
+		require.EqualValues(t, 1156, sizeErr.MaxDatagramPayloadSize)
+	case <-time.After(time.Second):
+		c.datagramQueue.CloseWithError(assertTryCloseError)
+		<-done
+		t.Fatal("path shrink did not wake and reject pending oversized admission")
+	}
+	c.datagramQueue.Pop()
+	require.NoError(t, c.TrySendDatagram(make([]byte, 1100)))
+}
+
+func TestDatagramAdmissionRevalidatesPathAfterPreparation(t *testing.T) {
+	c := readyCapacityConn(16383, 1356)
+	epoch, err := c.datagramQueue.PrepareSend(1350, 1356)
+	require.NoError(t, err)
+	c.setDatagramPathPayloadLimit(1156)
+	var sizeErr *DatagramTooLargeError
+	require.ErrorAs(t, c.datagramQueue.add(&wire.DatagramFrame{DataLenPresent: true, Data: make([]byte, 1350)}, epoch), &sizeErr)
+	require.EqualValues(t, 1156, sizeErr.MaxDatagramPayloadSize)
+	// A concurrent Try or getter can have loaded the previous advisory snapshot.
+	// The queue's current path bound must still win under its admission lock.
+	require.ErrorAs(t, c.datagramQueue.TryAdd(make([]byte, 1350), 1356), &sizeErr)
+	size, err := c.datagramQueue.CurrentMaxPayloadSize(1356)
+	require.NoError(t, err)
+	require.EqualValues(t, 1156, size)
+	require.Nil(t, c.datagramQueue.Peek())
+	require.NoError(t, c.SendDatagram(make([]byte, 1100)))
+	require.Len(t, c.datagramQueue.Peek().Data, 1100)
 }

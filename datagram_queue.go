@@ -20,6 +20,7 @@ const (
 type datagramQueue struct {
 	sendMx        sync.Mutex
 	sendWaiters   int                // blocked Add callers have priority over TryAdd
+	pathLimit     protocol.ByteCount // current path body bound, authoritative at admission
 	sendLimit     protocol.ByteCount // maximum body; negative means no encoding fits
 	sendSupported bool
 	sendEpoch     uint64        // queued and blocked 0-RTT sends cannot cross a rejection
@@ -43,6 +44,7 @@ func newDatagramQueue(hasData func(), logger utils.Logger) *datagramQueue {
 	return &datagramQueue{
 		hasData:       hasData,
 		sendLimit:     protocol.MaxByteCount,
+		pathLimit:     protocol.MaxByteCount,
 		sendSupported: true,
 		sendChanged:   make(chan struct{}),
 		rcvd:          make(chan struct{}, 1),
@@ -67,7 +69,7 @@ func (h *datagramQueue) sendError(size int, maxPayload protocol.ByteCount, epoch
 	if !h.sendSupported {
 		return errors.New("datagram support disabled")
 	}
-	limit := min(h.sendLimit, maxPayload)
+	limit := min(h.sendLimit, h.pathLimit, maxPayload)
 	if protocol.ByteCount(size) > limit {
 		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(limit)}
 	}
@@ -168,7 +170,18 @@ func (h *datagramQueue) CurrentMaxPayloadSize(maxPayload protocol.ByteCount) (in
 	if err := h.sendError(0, maxPayload, h.sendEpoch); err != nil {
 		return 0, err
 	}
-	return int64(min(h.sendLimit, maxPayload)), nil
+	return int64(min(h.sendLimit, h.pathLimit, maxPayload)), nil
+}
+
+// SetPathPayloadLimit serializes path-size changes with all admissions. Wake
+// blocked senders even when no queue slot opens: their copied payload may now
+// be too large. Already admitted frames may be discarded by the packet packer.
+func (h *datagramQueue) SetPathPayloadLimit(limit protocol.ByteCount) {
+	h.sendMx.Lock()
+	defer h.sendMx.Unlock()
+	h.pathLimit = limit
+	close(h.sendChanged)
+	h.sendChanged = make(chan struct{})
 }
 
 // SetSendLimit publishes the newly applicable peer DATAGRAM body limit and

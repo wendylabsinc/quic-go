@@ -323,7 +323,7 @@ var newConnection = func(
 		s.qlogger,
 		s.logger,
 	)
-	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
+	s.setDatagramPathPayloadLimit(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize)))
 	statelessResetToken := statelessResetter.GetStatelessResetToken(srcConnID)
 	params := &wire.TransportParameters{
 		InitialMaxStreamDataBidiLocal:   protocol.ByteCount(s.config.InitialStreamReceiveWindow),
@@ -453,7 +453,7 @@ var newClientConnection = func(
 		s.qlogger,
 		s.logger,
 	)
-	s.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize))))
+	s.setDatagramPathPayloadLimit(estimateMaxPayloadSize(protocol.ByteCount(s.config.InitialPacketSize)))
 	oneRTTStream := newCryptoStream(protocol.ByteCount(s.config.MaxCryptoStreamSize))
 	params := &wire.TransportParameters{
 		InitialMaxStreamDataBidiRemote: protocol.ByteCount(s.config.InitialStreamReceiveWindow),
@@ -920,7 +920,7 @@ func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 	start, max := c.pathMTUBounds(conn.capabilities().DF)
 	c.sentPacketHandler.MigratedPath(now, start)
 	c.mtuDiscoverer.Reset(now, start, max)
-	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(start)))
+	c.setDatagramPathPayloadLimit(estimateMaxPayloadSize(start))
 	c.connStateMutex.Lock()
 	c.conn = conn
 	c.connStateMutex.Unlock()
@@ -1296,7 +1296,7 @@ func (c *Conn) handleShortHeaderPacket(
 	start, max := c.pathMTUBounds(c.conn.capabilities().DF)
 	c.sentPacketHandler.MigratedPath(p.rcvTime, start)
 	c.mtuDiscoverer.Reset(p.rcvTime, start, max)
-	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(start)))
+	c.setDatagramPathPayloadLimit(estimateMaxPayloadSize(start))
 	c.conn.ChangeRemoteAddr(p.remoteAddr, p.info)
 	return true, nil
 }
@@ -2133,7 +2133,7 @@ func (c *Conn) handleAckFrame(frame *wire.AckFrame, encLevel protocol.Encryption
 		mtu := c.mtuDiscoverer.CurrentSize()
 		maxPayloadSize := estimateMaxPayloadSize(mtu)
 		if maxPayloadSize > protocol.ByteCount(c.maxPayloadSizeEstimate.Load()) {
-			c.maxPayloadSizeEstimate.Store(uint32(maxPayloadSize))
+			c.setDatagramPathPayloadLimit(maxPayloadSize)
 			c.sentPacketHandler.SetMaxDatagramSize(mtu)
 		}
 	}
@@ -2440,7 +2440,7 @@ func (c *Conn) applyTransportParameters() {
 	}
 	start, max := c.pathMTUBounds(c.conn.capabilities().DF)
 	c.mtuDiscoverer = newMTUDiscoverer(c.rttStats, start, max, c.qlogger)
-	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(start)))
+	c.setDatagramPathPayloadLimit(estimateMaxPayloadSize(start))
 }
 
 // pathMTUBounds applies the local sender ceiling and the peer's receive limit.
@@ -3061,6 +3061,13 @@ func (c *Conn) SendDatagram(p []byte) error {
 	}
 	f := &wire.DatagramFrame{DataLenPresent: true, Data: bytes.Clone(p)}
 	return c.datagramQueue.add(f, epoch)
+}
+
+// setDatagramPathPayloadLimit publishes an authoritative admission bound before
+// its advisory snapshot. A blocked send must revalidate after a path shrinks.
+func (c *Conn) setDatagramPathPayloadLimit(limit protocol.ByteCount) {
+	c.datagramQueue.SetPathPayloadLimit(limit)
+	c.maxPayloadSizeEstimate.Store(uint32(limit))
 }
 
 // updateDatagramSendLimit publishes only parameters applicable to the current
