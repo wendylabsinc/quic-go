@@ -102,6 +102,8 @@ var ErrDatagramQueueFull = errors.New("quic: datagram send queue full")
 // DatagramTooLargeError is returned from [Conn.SendDatagram] and
 // [Conn.TrySendDatagram] if the payload is too large to be sent.
 type DatagramTooLargeError struct {
+	// MaxDatagramPayloadSize is the conservative current body allowance.
+	// A negative value means even an empty datagram cannot fit the peer limit.
 	MaxDatagramPayloadSize int64
 }
 

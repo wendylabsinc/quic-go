@@ -164,6 +164,7 @@ type Conn struct {
 	packer        packer
 	mtuDiscoverer *mtuFinder // initialized when the transport parameters are received
 
+	// Conservative DATAGRAM body capacity of the current path.
 	maxPayloadSizeEstimate atomic.Uint32
 
 	initialStream       *initialCryptoStream
@@ -559,7 +560,7 @@ func (c *Conn) preSetup() {
 	c.receivedPacketHandler = *ackhandler.NewReceivedPacketHandler(c.logger)
 
 	c.datagramQueue = newDatagramQueue(c.scheduleSending, c.logger)
-	c.datagramQueue.SetSendLimit(protocol.InvalidByteCount)
+	c.datagramQueue.SetSendLimit(protocol.InvalidByteCount, false)
 	c.connState.Version = c.version
 }
 
@@ -3069,9 +3070,13 @@ func (c *Conn) updateDatagramSendLimit(peerMax protocol.ByteCount) {
 	limit := protocol.InvalidByteCount
 	if peerMax > 0 {
 		f := wire.DatagramFrame{DataLenPresent: true}
-		limit = f.MaxDataLen(peerMax, c.version)
+		// MaxDataLen returns zero when even an empty length-present frame
+		// cannot fit. Distinguish that from a usable zero-body allowance.
+		if peerMax >= f.Length(c.version) {
+			limit = f.MaxDataLen(peerMax, c.version)
+		}
 	}
-	c.datagramQueue.SetSendLimit(limit)
+	c.datagramQueue.SetSendLimit(limit, peerMax > 0)
 }
 
 // TrySendDatagram attempts to queue a QUIC datagram without waiting for
@@ -3089,6 +3094,29 @@ func (c *Conn) updateDatagramSendLimit(peerMax protocol.ByteCount) {
 // The caller may reuse p after this method returns. Concurrent calls are safe.
 func (c *Conn) TrySendDatagram(p []byte) error {
 	return c.datagramQueue.TryAdd(p, protocol.ByteCount(c.maxPayloadSizeEstimate.Load()))
+}
+
+// CurrentMaxDatagramPayloadSize returns a conservative current DATAGRAM body
+// allowance, excluding QUIC and DATAGRAM framing. It returns an error if the
+// handshake is incomplete, the peer has not enabled usable DATAGRAM support,
+// or the connection is closed. A zero allowance can permit an empty datagram.
+//
+// The snapshot neither reserves queue space nor guarantees transmission or
+// delivery. It can change on path migration or PMTU discovery; callers must
+// still handle errors from [Conn.TrySendDatagram] or [Conn.SendDatagram]. An
+// already admitted datagram can be dropped after a size decrease.
+func (c *Conn) CurrentMaxDatagramPayloadSize() (int64, error) {
+	select {
+	case <-c.handshakeCompleteChan:
+		return c.datagramQueue.CurrentMaxPayloadSize(protocol.ByteCount(c.maxPayloadSizeEstimate.Load()))
+	default:
+		// Preserve close/support errors, but never expose a short-header size
+		// estimate as a safe 0-RTT long-header payload allowance.
+		if _, err := c.datagramQueue.CurrentMaxPayloadSize(protocol.ByteCount(c.maxPayloadSizeEstimate.Load())); err != nil {
+			return 0, err
+		}
+		return 0, errors.New("datagram payload size unavailable before handshake completion")
+	}
 }
 
 // ReceiveDatagram gets a message received in a QUIC datagram, as specified in RFC 9221.
@@ -3200,9 +3228,13 @@ func (c *Conn) NextConnection(ctx context.Context) (*Conn, error) {
 	}
 }
 
-// estimateMaxPayloadSize estimates the maximum payload size for short header packets.
-// It is not very sophisticated: it just subtracts the size of header (assuming the maximum
-// connection ID length), and the size of the encryption tag.
+// estimateMaxPayloadSize conservatively bounds a length-present DATAGRAM body
+// in a short-header packet. Reserve the maximum connection ID, four packet
+// number bytes, and the 16-byte tag of every supported TLS cipher suite, then
+// account for the DATAGRAM type and length varint. Versions 1 and 2 use the same
+// DATAGRAM framing. This is not a 0-RTT long-header allowance.
 func estimateMaxPayloadSize(mtu protocol.ByteCount) protocol.ByteCount {
-	return mtu - 1 /* type byte */ - 20 /* maximum connection ID length */ - 16 /* tag size */
+	frameBudget := mtu - 1 - protocol.MaxConnIDLen - protocol.ByteCount(protocol.PacketNumberLen4) - 16
+	f := wire.DatagramFrame{DataLenPresent: true}
+	return f.MaxDataLen(frameBudget, protocol.Version1)
 }

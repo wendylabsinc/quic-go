@@ -18,13 +18,14 @@ const (
 )
 
 type datagramQueue struct {
-	sendMx      sync.Mutex
-	sendWaiters int                // blocked Add callers have priority over TryAdd
-	sendLimit   protocol.ByteCount // maximum DATAGRAM body; negative means unsupported
-	sendEpoch   uint64             // queued and blocked 0-RTT sends cannot cross a rejection
-	sendChanged chan struct{}      // broadcasts capability changes and 0-RTT rejection
-	sendQueue   ringbuffer.RingBuffer[*wire.DatagramFrame]
-	sent        chan struct{} // used to notify Add that a datagram was dequeued
+	sendMx        sync.Mutex
+	sendWaiters   int                // blocked Add callers have priority over TryAdd
+	sendLimit     protocol.ByteCount // maximum body; negative means no encoding fits
+	sendSupported bool
+	sendEpoch     uint64        // queued and blocked 0-RTT sends cannot cross a rejection
+	sendChanged   chan struct{} // broadcasts capability changes and 0-RTT rejection
+	sendQueue     ringbuffer.RingBuffer[*wire.DatagramFrame]
+	sent          chan struct{} // used to notify Add that a datagram was dequeued
 
 	rcvMx    sync.Mutex
 	rcvQueue [][]byte
@@ -40,13 +41,14 @@ type datagramQueue struct {
 
 func newDatagramQueue(hasData func(), logger utils.Logger) *datagramQueue {
 	return &datagramQueue{
-		hasData:     hasData,
-		sendLimit:   protocol.MaxByteCount,
-		sendChanged: make(chan struct{}),
-		rcvd:        make(chan struct{}, 1),
-		sent:        make(chan struct{}, 1),
-		closed:      make(chan struct{}),
-		logger:      logger,
+		hasData:       hasData,
+		sendLimit:     protocol.MaxByteCount,
+		sendSupported: true,
+		sendChanged:   make(chan struct{}),
+		rcvd:          make(chan struct{}, 1),
+		sent:          make(chan struct{}, 1),
+		closed:        make(chan struct{}),
+		logger:        logger,
 	}
 }
 
@@ -62,7 +64,7 @@ func (h *datagramQueue) sendError(size int, maxPayload protocol.ByteCount, epoch
 	if epoch != h.sendEpoch {
 		return Err0RTTRejected
 	}
-	if h.sendLimit < 0 {
+	if !h.sendSupported {
 		return errors.New("datagram support disabled")
 	}
 	limit := min(h.sendLimit, maxPayload)
@@ -158,15 +160,27 @@ func (h *datagramQueue) TryAdd(p []byte, maxPayload protocol.ByteCount) error {
 	return nil
 }
 
+// CurrentMaxPayloadSize reports body capacity independently of queue occupancy.
+// It does not reserve capacity for a subsequent send.
+func (h *datagramQueue) CurrentMaxPayloadSize(maxPayload protocol.ByteCount) (int64, error) {
+	h.sendMx.Lock()
+	defer h.sendMx.Unlock()
+	if err := h.sendError(0, maxPayload, h.sendEpoch); err != nil {
+		return 0, err
+	}
+	return int64(min(h.sendLimit, maxPayload)), nil
+}
+
 // SetSendLimit publishes the newly applicable peer DATAGRAM body limit and
 // removes frames that no longer fit. All blocked admissions revalidate it.
-func (h *datagramQueue) SetSendLimit(limit protocol.ByteCount) {
+func (h *datagramQueue) SetSendLimit(limit protocol.ByteCount, supported bool) {
 	h.sendMx.Lock()
 	defer h.sendMx.Unlock()
 	h.sendLimit = limit
+	h.sendSupported = supported
 	for range h.sendQueue.Len() {
 		f := h.sendQueue.PopFront()
-		if limit >= 0 && protocol.ByteCount(len(f.Data)) <= limit {
+		if supported && limit >= 0 && protocol.ByteCount(len(f.Data)) <= limit {
 			h.sendQueue.PushBack(f)
 		}
 	}
@@ -181,6 +195,7 @@ func (h *datagramQueue) Reject0RTT() {
 	defer h.sendMx.Unlock()
 	h.sendEpoch++
 	h.sendLimit = protocol.InvalidByteCount
+	h.sendSupported = false
 	h.sendQueue.Clear()
 	close(h.sendChanged)
 	h.sendChanged = make(chan struct{})
