@@ -19,7 +19,7 @@ import (
 
 func testTryDatagramConn(queue *datagramQueue, peerMax int64, packetEstimate uint32) *Conn {
 	c := &Conn{datagramQueue: queue, version: protocol.Version1}
-	c.peerMaxDatagramFrameSize.Store(peerMax)
+	c.updateDatagramSendLimit(protocol.ByteCount(peerMax))
 	c.maxPayloadSizeEstimate.Store(packetEstimate)
 	return c
 }
@@ -51,7 +51,7 @@ func TestTrySendDatagramValidationAndOwnership(t *testing.T) {
 	queue := newDatagramQueue(func() {}, utils.DefaultLogger)
 	c := testTryDatagramConn(queue, 0, 1200)
 	for _, limit := range []int64{0, -1} {
-		c.peerMaxDatagramFrameSize.Store(limit)
+		c.updateDatagramSendLimit(protocol.ByteCount(limit))
 		require.Error(t, c.TrySendDatagram(nil))
 		require.Nil(t, queue.Peek())
 	}
@@ -97,7 +97,7 @@ func TestTryDatagramPreservesBlockedSenders(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		queue := newDatagramQueue(func() {}, utils.DefaultLogger)
 		for range maxDatagramSendQueueLen {
-			require.NoError(t, queue.TryAdd([]byte("original")))
+			require.NoError(t, queue.TryAdd([]byte("original"), protocol.MaxByteCount))
 		}
 		const waiters = 3
 		results := make(chan error, waiters)
@@ -109,7 +109,7 @@ func TestTryDatagramPreservesBlockedSenders(t *testing.T) {
 		// Try must not consume the free slots reserved for those producers.
 		for range waiters {
 			queue.Pop()
-			require.ErrorIs(t, queue.TryAdd([]byte("overtake")), ErrDatagramQueueFull)
+			require.ErrorIs(t, queue.TryAdd([]byte("overtake"), protocol.MaxByteCount), ErrDatagramQueueFull)
 		}
 		synctest.Wait()
 		for range waiters {
@@ -128,7 +128,7 @@ func TestTryDatagramPreservesBlockedSenders(t *testing.T) {
 			require.Equal(t, []byte("blocking"), queue.Peek().Data)
 			queue.Pop()
 		}
-		require.NoError(t, queue.TryAdd([]byte("later")))
+		require.NoError(t, queue.TryAdd([]byte("later"), protocol.MaxByteCount))
 	})
 }
 
@@ -137,7 +137,7 @@ func TestTryDatagramCloseAdmissionRace(t *testing.T) {
 		queue := newDatagramQueue(func() {}, utils.DefaultLogger)
 		start := make(chan struct{})
 		result := make(chan error, 1)
-		go func() { <-start; result <- queue.TryAdd([]byte("racing")) }()
+		go func() { <-start; result <- queue.TryAdd([]byte("racing"), protocol.MaxByteCount) }()
 		close(start)
 		queue.CloseWithError(assertTryCloseError)
 		err := <-result
@@ -147,7 +147,7 @@ func TestTryDatagramCloseAdmissionRace(t *testing.T) {
 		} else {
 			require.ErrorIs(t, err, assertTryCloseError)
 		}
-		require.ErrorIs(t, queue.TryAdd(nil), assertTryCloseError)
+		require.ErrorIs(t, queue.TryAdd(nil, protocol.MaxByteCount), assertTryCloseError)
 		require.Nil(t, queue.Peek())
 	}
 }
@@ -172,8 +172,8 @@ func TestTryDatagramConcurrentProducersAndParameterUpdates(t *testing.T) {
 	go func() {
 		defer close(updatesDone)
 		for range 1000 {
-			c.peerMaxDatagramFrameSize.Store(2000)
-			c.peerMaxDatagramFrameSize.Store(16383)
+			c.updateDatagramSendLimit(2000)
+			c.updateDatagramSendLimit(16383)
 		}
 	}()
 	producersDone := make(chan struct{})
@@ -200,4 +200,86 @@ func TestTryDatagramConcurrentProducersAndParameterUpdates(t *testing.T) {
 			runtime.Gosched()
 		}
 	}
+}
+
+func TestDatagramPendingAdmissionsRevalidatePeerLimits(t *testing.T) {
+	for _, peerMax := range []protocol.ByteCount{100, 0} {
+		t.Run(fmt.Sprint(peerMax), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				queue := newDatagramQueue(func() {}, utils.DefaultLogger)
+				c := testTryDatagramConn(queue, 16383, 1200)
+				for range maxDatagramSendQueueLen {
+					require.NoError(t, c.TrySendDatagram(make([]byte, 1000)))
+				}
+				large := make(chan error, 1)
+				small := make(chan error, 1)
+				go func() { large <- c.SendDatagram(make([]byte, 1000)) }()
+				go func() { small <- c.SendDatagram([]byte("valid")) }()
+				synctest.Wait()
+				c.updateDatagramSendLimit(peerMax)
+				synctest.Wait()
+				if peerMax > 0 {
+					var sizeErr *DatagramTooLargeError
+					require.ErrorAs(t, <-large, &sizeErr)
+					require.EqualValues(t, 97, sizeErr.MaxDatagramPayloadSize)
+					require.NoError(t, <-small)
+					require.Equal(t, []byte("valid"), queue.Peek().Data)
+					queue.Pop()
+				} else {
+					require.Error(t, <-large)
+					require.Error(t, <-small)
+					require.Error(t, c.TrySendDatagram(nil))
+					require.Error(t, c.SendDatagram(nil))
+				}
+				require.Nil(t, queue.Peek())
+				c.updateDatagramSendLimit(16383)
+				require.NoError(t, c.TrySendDatagram([]byte("later")))
+			})
+		})
+	}
+}
+
+func TestDatagramCopiedAdmissionsCannotCrossRejection(t *testing.T) {
+	queue := newDatagramQueue(func() {}, utils.DefaultLogger)
+	c := testTryDatagramConn(queue, 16383, 1200)
+	epoch, err := queue.PrepareSend(64, 1200)
+	require.NoError(t, err)
+	copied := &wire.DatagramFrame{DataLenPresent: true, Data: make([]byte, 64)}
+	queue.Reject0RTT()
+	c.updateDatagramSendLimit(16383) // identical limits do not authorize replay
+	require.ErrorIs(t, queue.add(copied, epoch), Err0RTTRejected)
+	require.Nil(t, queue.Peek())
+	freshEpoch, err := queue.PrepareSend(64, 1200)
+	require.NoError(t, err)
+	c.updateDatagramSendLimit(10)
+	var sizeErr *DatagramTooLargeError
+	require.ErrorAs(t, queue.add(copied, freshEpoch), &sizeErr)
+	c.updateDatagramSendLimit(0)
+	require.Error(t, queue.add(copied, freshEpoch))
+	require.Nil(t, queue.Peek())
+}
+
+func TestDatagramRejectionDiscardsAllQueuedAndBlockedData(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := newDatagramQueue(func() {}, utils.DefaultLogger)
+		c := testTryDatagramConn(queue, 16383, 1200)
+		for range maxDatagramSendQueueLen {
+			require.NoError(t, c.TrySendDatagram([]byte("must not replay")))
+		}
+		const waiters = 3
+		results := make(chan error, waiters)
+		for range waiters {
+			go func() { results <- c.SendDatagram([]byte("also must not replay")) }()
+		}
+		synctest.Wait()
+		queue.Reject0RTT()
+		c.updateDatagramSendLimit(16383)
+		synctest.Wait()
+		for range waiters {
+			require.ErrorIs(t, <-results, Err0RTTRejected)
+		}
+		require.Nil(t, queue.Peek())
+		require.NoError(t, c.TrySendDatagram([]byte("fresh application data")))
+		require.Equal(t, []byte("fresh application data"), queue.Peek().Data)
+	})
 }
