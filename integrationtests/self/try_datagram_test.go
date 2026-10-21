@@ -219,3 +219,64 @@ func TestTrySendDatagramRejected0RTT(t *testing.T) {
 		})
 	}
 }
+
+func TestTrySendDatagramCloseWhileQueueFull(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		clientPacketConn, serverPacketConn, closeFn := newSimnetLink(t, 10*time.Millisecond)
+		defer closeFn(t)
+		ln, err := quic.Listen(serverPacketConn, getTLSConfig(), getQuicConfig(&quic.Config{EnableDatagrams: true}))
+		require.NoError(t, err)
+		defer ln.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		client, err := quic.Dial(ctx, clientPacketConn, ln.Addr(), getTLSClientConfig(), getQuicConfig(&quic.Config{EnableDatagrams: true}))
+		require.NoError(t, err)
+		defer client.CloseWithError(0, "")
+		server, err := ln.Accept(ctx)
+		require.NoError(t, err)
+		defer server.CloseWithError(0, "")
+		payload := make([]byte, 1000)
+		fill := func() {
+			t.Helper()
+			for range 10000 {
+				err := client.TrySendDatagram(payload)
+				if errors.Is(err, quic.ErrDatagramQueueFull) {
+					return
+				}
+				require.NoError(t, err)
+			}
+			t.Fatal("send queue never filled")
+		}
+		fill()
+		// Allow current work to consume its available congestion credit, then
+		// refill. Future ACKs cannot arrive until fake time advances.
+		synctest.Wait()
+		fill()
+		blocked := make(chan error, 1)
+		go func() { blocked <- client.SendDatagram(payload) }()
+		synctest.Wait()
+		select {
+		case err := <-blocked:
+			t.Fatalf("legacy sender should be blocked, got %v", err)
+		default:
+		}
+		closed := make(chan error, 1)
+		go func() { closed <- client.CloseWithError(42, "full queue shutdown") }()
+		select {
+		case err := <-closed:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatal("connection closure waited for DATAGRAM queue progress")
+		}
+		var closeErr *quic.ApplicationError
+		select {
+		case err := <-blocked:
+			require.ErrorAs(t, err, &closeErr)
+			require.EqualValues(t, 42, closeErr.ErrorCode)
+		case <-ctx.Done():
+			t.Fatal("closure did not release legacy sender")
+		}
+		require.ErrorAs(t, client.TrySendDatagram(nil), &closeErr)
+		require.EqualValues(t, 42, closeErr.ErrorCode)
+	})
+}
