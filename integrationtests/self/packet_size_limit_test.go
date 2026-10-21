@@ -131,6 +131,8 @@ func TestDatagramCapacityResetsOnMigration(t *testing.T) {
 	}
 	transfer()
 	require.Eventually(t, func() bool { n, e := client.CurrentMaxDatagramPayloadSize(); return e == nil && n >= 1329 }, 2*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { n, e := server.CurrentMaxDatagramPayloadSize(); return e == nil && n >= 1329 }, 2*time.Second, time.Millisecond)
+	oldServerRemote := server.RemoteAddr().String()
 	path, err := client.AddPath(tr2)
 	require.NoError(t, err)
 	require.NoError(t, path.Probe(ctx))
@@ -147,6 +149,8 @@ func TestDatagramCapacityResetsOnMigration(t *testing.T) {
 				client.LocalAddr()
 				client.RemoteAddr()
 				client.CurrentMaxDatagramPayloadSize()
+				server.RemoteAddr()
+				server.CurrentMaxDatagramPayloadSize()
 			}
 		}
 	}()
@@ -163,4 +167,15 @@ func TestDatagramCapacityResetsOnMigration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, body, 1100)
 	transfer()
+	// The proxy opens a different server-facing socket for the new client
+	// address. Exercise the incoming migration reset as well as the outgoing one.
+	require.Eventually(t, func() bool { return server.RemoteAddr().String() != oldServerRemote }, time.Second, time.Millisecond)
+	capacity, err = server.CurrentMaxDatagramPayloadSize()
+	require.NoError(t, err)
+	require.EqualValues(t, 1156, capacity)
+	require.ErrorAs(t, server.TrySendDatagram(make([]byte, 1329)), &sizeErr)
+	require.NoError(t, server.TrySendDatagram(make([]byte, 1100)))
+	body, err = client.ReceiveDatagram(ctx)
+	require.NoError(t, err)
+	require.Len(t, body, 1100)
 }
