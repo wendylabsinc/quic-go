@@ -165,6 +165,9 @@ type Conn struct {
 	mtuDiscoverer *mtuFinder // initialized when the transport parameters are received
 
 	maxPayloadSizeEstimate atomic.Uint32
+	// Published when restored 0-RTT or negotiated 1-RTT parameters become usable.
+	// TrySendDatagram must not read peerParams concurrently with the handshake.
+	peerMaxDatagramFrameSize atomic.Int64
 
 	initialStream       *initialCryptoStream
 	handshakeStream     *cryptoStream
@@ -2352,6 +2355,7 @@ func (c *Conn) restoreTransportParameters(params *wire.TransportParameters) {
 	}
 
 	c.peerParams = params
+	c.peerMaxDatagramFrameSize.Store(int64(params.MaxDatagramFrameSize))
 	c.connIDGenerator.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
 	c.connFlowController.UpdateSendWindow(params.InitialMaxData)
 	c.streamsMap.HandleTransportParameters(params)
@@ -2419,6 +2423,7 @@ func (c *Conn) checkTransportParameters(params *wire.TransportParameters) error 
 
 func (c *Conn) applyTransportParameters() {
 	params := c.peerParams
+	c.peerMaxDatagramFrameSize.Store(int64(params.MaxDatagramFrameSize))
 	// Our local idle timeout will always be > 0.
 	c.idleTimeout = c.config.MaxIdleTimeout
 	// If the peer advertised an idle timeout, take the minimum of the values.
@@ -3062,6 +3067,34 @@ func (c *Conn) SendDatagram(p []byte) error {
 	f.Data = make([]byte, len(p))
 	copy(f.Data, p)
 	return c.datagramQueue.Add(f)
+}
+
+// TrySendDatagram attempts to queue a QUIC datagram without waiting for
+// send-queue capacity, congestion control, pacing, or a network write.
+// A nil error means only that an owned copy was admitted to the local queue;
+// it does not guarantee transmission or delivery. Like [Conn.SendDatagram], an
+// admitted datagram can be dropped if the available packet size decreases.
+//
+// If no capacity is available, including capacity reserved for blocked
+// SendDatagram calls, it returns [ErrDatagramQueueFull] without copying p.
+// If the payload is too large, it returns a [DatagramTooLargeError]. If the peer
+// has not advertised datagram support, it returns an error. Restored transport
+// parameters can permit sending on an early connection before the handshake.
+// The caller may reuse p after this method returns. Concurrent calls are safe.
+func (c *Conn) TrySendDatagram(p []byte) error {
+	peerMax := protocol.ByteCount(c.peerMaxDatagramFrameSize.Load())
+	if peerMax <= 0 {
+		return errors.New("datagram support disabled")
+	}
+	f := wire.DatagramFrame{DataLenPresent: true}
+	maxDataLen := min(
+		f.MaxDataLen(peerMax, c.version),
+		protocol.ByteCount(c.maxPayloadSizeEstimate.Load()),
+	)
+	if protocol.ByteCount(len(p)) > maxDataLen {
+		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(maxDataLen)}
+	}
+	return c.datagramQueue.TryAdd(p)
 }
 
 // ReceiveDatagram gets a message received in a QUIC datagram, as specified in RFC 9221.

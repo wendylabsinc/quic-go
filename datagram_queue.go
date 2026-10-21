@@ -1,6 +1,7 @@
 package quic
 
 import (
+	"bytes"
 	"context"
 	"sync"
 
@@ -15,9 +16,10 @@ const (
 )
 
 type datagramQueue struct {
-	sendMx    sync.Mutex
-	sendQueue ringbuffer.RingBuffer[*wire.DatagramFrame]
-	sent      chan struct{} // used to notify Add that a datagram was dequeued
+	sendMx      sync.Mutex
+	sendWaiters int // blocked Add callers have priority over TryAdd
+	sendQueue   ringbuffer.RingBuffer[*wire.DatagramFrame]
+	sent        chan struct{} // used to notify Add that a datagram was dequeued
 
 	rcvMx    sync.Mutex
 	rcvQueue [][]byte
@@ -46,13 +48,30 @@ func newDatagramQueue(hasData func(), logger utils.Logger) *datagramQueue {
 // Once that limit is reached, Add blocks until the queue size has reduced.
 func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 	h.sendMx.Lock()
+	waiting := false
 
 	for {
 		if h.sendQueue.Len() < maxDatagramSendQueueLen {
+			if waiting {
+				h.sendWaiters--
+			}
 			h.sendQueue.PushBack(f)
+			// Pop notifications can coalesce while several slots become free.
+			// Pass available capacity to another blocked sender before TryAdd
+			// may use it.
+			if h.sendWaiters > 0 && h.sendQueue.Len() < maxDatagramSendQueueLen {
+				select {
+				case h.sent <- struct{}{}:
+				default:
+				}
+			}
 			h.sendMx.Unlock()
 			h.hasData()
 			return nil
+		}
+		if !waiting {
+			h.sendWaiters++
+			waiting = true
 		}
 		select {
 		case <-h.sent: // drain the queue so we don't loop immediately
@@ -61,11 +80,35 @@ func (h *datagramQueue) Add(f *wire.DatagramFrame) error {
 		h.sendMx.Unlock()
 		select {
 		case <-h.closed:
+			h.sendMx.Lock()
+			h.sendWaiters--
+			h.sendMx.Unlock()
 			return h.closeErr
 		case <-h.sent:
 		}
 		h.sendMx.Lock()
 	}
+}
+
+// TryAdd copies and queues a DATAGRAM without waiting for send-queue space.
+// Admission and closure are serialized by sendMx. Existing blocked Add callers
+// reserve available capacity, so repeated TryAdd calls cannot starve them.
+func (h *datagramQueue) TryAdd(p []byte) error {
+	h.sendMx.Lock()
+	select {
+	case <-h.closed:
+		h.sendMx.Unlock()
+		return h.closeErr
+	default:
+	}
+	if h.sendWaiters > 0 || h.sendQueue.Len() >= maxDatagramSendQueueLen {
+		h.sendMx.Unlock()
+		return ErrDatagramQueueFull
+	}
+	h.sendQueue.PushBack(&wire.DatagramFrame{DataLenPresent: true, Data: bytes.Clone(p)})
+	h.sendMx.Unlock()
+	h.hasData()
+	return nil
 }
 
 // Peek gets the next DATAGRAM frame for sending.
@@ -132,6 +175,8 @@ func (h *datagramQueue) Receive(ctx context.Context) ([]byte, error) {
 }
 
 func (h *datagramQueue) CloseWithError(e error) {
+	h.sendMx.Lock()
+	defer h.sendMx.Unlock()
 	h.closeErr = e
 	close(h.closed)
 }

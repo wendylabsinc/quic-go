@@ -1,6 +1,7 @@
 package quic
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/quic-go/quic-go/internal/qerr"
@@ -93,7 +94,13 @@ func (e *StreamError) Error() string {
 	return fmt.Sprintf("stream %d canceled by %s with error code %d", e.StreamID, pers, e.ErrorCode)
 }
 
-// DatagramTooLargeError is returned from [Conn.SendDatagram] if the payload is too large to be sent.
+// ErrDatagramQueueFull is returned by [Conn.TrySendDatagram] when no send-queue
+// capacity is available. The datagram was not copied or queued. Capacity reserved
+// for blocked [Conn.SendDatagram] calls is unavailable to TrySendDatagram.
+var ErrDatagramQueueFull = errors.New("quic: datagram send queue full")
+
+// DatagramTooLargeError is returned from [Conn.SendDatagram] and
+// [Conn.TrySendDatagram] if the payload is too large to be sent.
 type DatagramTooLargeError struct {
 	MaxDatagramPayloadSize int64
 }
