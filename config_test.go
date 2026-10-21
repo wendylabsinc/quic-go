@@ -126,6 +126,8 @@ func configWithNonZeroNonFunctionFields(t *testing.T) *Config {
 			f.Set(reflect.ValueOf(true))
 		case "DisableVersionNegotiationPackets":
 			f.Set(reflect.ValueOf(true))
+		case "MaxPacketSize":
+			f.Set(reflect.ValueOf(uint16(1400)))
 		case "InitialPacketSize":
 			f.Set(reflect.ValueOf(uint16(1350)))
 		case "DisablePathMTUDiscovery":

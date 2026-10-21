@@ -187,8 +187,17 @@ type Config struct {
 	// If set too high, the path might not support packets of that size, leading to a timeout of the QUIC handshake.
 	// Values below 1200 are invalid.
 	InitialPacketSize uint16
+	// MaxPacketSize caps the UDP payload size of sent QUIC packets, including
+	// path MTU probes. It includes QUIC headers and encryption overhead, but
+	// excludes UDP and IP headers. For GSO, the cap applies to each segment.
+	// Zero uses the implementation's default ceiling of 1452 bytes. Nonzero
+	// values must be between 1200 and 1452, and at least InitialPacketSize.
+	// When InitialPacketSize is zero, its default is capped by MaxPacketSize.
+	// This is an upper bound, not proof that a path supports packets this large.
+	MaxPacketSize uint16
 	// DisablePathMTUDiscovery disables Path MTU Discovery (RFC 8899).
-	// This allows the sending of QUIC packets that fully utilize the available MTU of the path.
+	// When disabled, packets stay at the initial path baseline; MaxPacketSize is
+	// still an upper bound.
 	// Path MTU discovery is only available on systems that allow setting of the Don't Fragment (DF) bit.
 	DisablePathMTUDiscovery bool
 	// Allow0RTT allows the application to decide if a 0-RTT connection attempt should be accepted.

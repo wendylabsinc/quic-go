@@ -915,14 +915,12 @@ func (c *Conn) idleTimeoutStartTime() monotime.Time {
 }
 
 func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
-	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
-	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
-	}
-	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
-	c.conn = newSendConn(tr.conn, c.conn.RemoteAddr(), packetInfo{}, utils.DefaultLogger) // TODO: find a better way
+	conn := newSendConn(tr.conn, c.conn.RemoteAddr(), packetInfo{}, utils.DefaultLogger) // TODO: find a better way
+	start, max := c.pathMTUBounds(conn.capabilities().DF)
+	c.sentPacketHandler.MigratedPath(now, start)
+	c.mtuDiscoverer.Reset(now, start, max)
+	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(start)))
+	c.conn = conn
 	c.sendQueue.Close()
 	c.sendQueue = newSendQueue(c.conn)
 	go func() {
@@ -1292,16 +1290,10 @@ func (c *Conn) handleShortHeaderPacket(
 		return true, nil
 	}
 	c.pathManager.SwitchToPath(p.remoteAddr)
-	c.sentPacketHandler.MigratedPath(p.rcvTime, protocol.ByteCount(c.config.InitialPacketSize))
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
-	}
-	c.mtuDiscoverer.Reset(
-		p.rcvTime,
-		protocol.ByteCount(c.config.InitialPacketSize),
-		maxPacketSize,
-	)
+	start, max := c.pathMTUBounds(c.conn.capabilities().DF)
+	c.sentPacketHandler.MigratedPath(p.rcvTime, start)
+	c.mtuDiscoverer.Reset(p.rcvTime, start, max)
+	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(start)))
 	c.conn.ChangeRemoteAddr(p.remoteAddr, p.info)
 	return true, nil
 }
@@ -2443,16 +2435,24 @@ func (c *Conn) applyTransportParameters() {
 		// Retire the connection ID.
 		c.connIDManager.AddFromPreferredAddress(params.PreferredAddress.ConnectionID, params.PreferredAddress.StatelessResetToken)
 	}
-	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = params.MaxUDPPayloadSize
+	start, max := c.pathMTUBounds(c.conn.capabilities().DF)
+	c.mtuDiscoverer = newMTUDiscoverer(c.rttStats, start, max, c.qlogger)
+	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(start)))
+}
+
+// pathMTUBounds applies the local sender ceiling and the peer's receive limit.
+// Disabling discovery (or lacking DF support) keeps the search at its baseline,
+// including after migration: Reset otherwise starts a new probe timer.
+func (c *Conn) pathMTUBounds(df bool) (start, max protocol.ByteCount) {
+	max = protocol.ByteCount(c.config.MaxPacketSize)
+	if c.peerParams.MaxUDPPayloadSize > 0 {
+		max = min(max, c.peerParams.MaxUDPPayloadSize)
 	}
-	c.mtuDiscoverer = newMTUDiscoverer(
-		c.rttStats,
-		protocol.ByteCount(c.config.InitialPacketSize),
-		maxPacketSize,
-		c.qlogger,
-	)
+	start = min(protocol.ByteCount(c.config.InitialPacketSize), max)
+	if c.config.DisablePathMTUDiscovery || !df {
+		max = start
+	}
+	return start, max
 }
 
 func (c *Conn) triggerSending(now monotime.Time) error {

@@ -48,6 +48,14 @@ func validateConfig(config *Config) error {
 	if config.MaxConnectionReceiveWindow > quicvarint.Max {
 		config.MaxConnectionReceiveWindow = quicvarint.Max
 	}
+	if config.MaxPacketSize != 0 {
+		if config.MaxPacketSize < protocol.MinInitialPacketSize || config.MaxPacketSize > protocol.MaxPacketBufferSize {
+			return fmt.Errorf("invalid maximum packet size: %d (must be between %d and %d)", config.MaxPacketSize, protocol.MinInitialPacketSize, protocol.MaxPacketBufferSize)
+		}
+		if config.InitialPacketSize > config.MaxPacketSize {
+			return fmt.Errorf("initial packet size %d exceeds maximum packet size %d", config.InitialPacketSize, config.MaxPacketSize)
+		}
+	}
 	if config.InitialPacketSize > 0 && config.InitialPacketSize < protocol.MinInitialPacketSize {
 		config.InitialPacketSize = protocol.MinInitialPacketSize
 	}
@@ -117,9 +125,13 @@ func populateConfig(config *Config) *Config {
 	} else if maxIncomingUniStreams < 0 {
 		maxIncomingUniStreams = 0
 	}
+	maxPacketSize := config.MaxPacketSize
+	if maxPacketSize == 0 {
+		maxPacketSize = protocol.MaxPacketBufferSize
+	}
 	initialPacketSize := config.InitialPacketSize
 	if initialPacketSize == 0 {
-		initialPacketSize = protocol.InitialPacketSize
+		initialPacketSize = min(uint16(protocol.InitialPacketSize), maxPacketSize)
 	}
 
 	return &Config{
@@ -141,6 +153,7 @@ func populateConfig(config *Config) *Config {
 		TokenStore:                       config.TokenStore,
 		EnableDatagrams:                  config.EnableDatagrams,
 		InitialPacketSize:                initialPacketSize,
+		MaxPacketSize:                    maxPacketSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		Allow0RTT:                        config.Allow0RTT,
