@@ -52,15 +52,15 @@ func validateConfig(config *Config) error {
 		if config.MaxPacketSize < protocol.MinInitialPacketSize || config.MaxPacketSize > protocol.MaxPacketBufferSize {
 			return fmt.Errorf("invalid maximum packet size: %d (must be between %d and %d)", config.MaxPacketSize, protocol.MinInitialPacketSize, protocol.MaxPacketBufferSize)
 		}
-		if config.InitialPacketSize > config.MaxPacketSize {
-			return fmt.Errorf("initial packet size %d exceeds maximum packet size %d", config.InitialPacketSize, config.MaxPacketSize)
-		}
 	}
 	if config.InitialPacketSize > 0 && config.InitialPacketSize < protocol.MinInitialPacketSize {
 		config.InitialPacketSize = protocol.MinInitialPacketSize
 	}
 	if config.InitialPacketSize > protocol.MaxPacketBufferSize {
 		config.InitialPacketSize = protocol.MaxPacketBufferSize
+	}
+	if config.MaxPacketSize != 0 && config.InitialPacketSize > config.MaxPacketSize {
+		return fmt.Errorf("initial packet size %d exceeds maximum packet size %d", config.InitialPacketSize, config.MaxPacketSize)
 	}
 	// check that all QUIC versions are actually supported
 	for _, v := range config.Versions {
