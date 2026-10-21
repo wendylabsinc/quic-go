@@ -920,7 +920,9 @@ func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 	c.sentPacketHandler.MigratedPath(now, start)
 	c.mtuDiscoverer.Reset(now, start, max)
 	c.maxPayloadSizeEstimate.Store(uint32(estimateMaxPayloadSize(start)))
+	c.connStateMutex.Lock()
 	c.conn = conn
+	c.connStateMutex.Unlock()
 	c.sendQueue.Close()
 	c.sendQueue = newSendQueue(c.conn)
 	go func() {
@@ -3098,10 +3100,20 @@ func (c *Conn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 }
 
 // LocalAddr returns the local address of the QUIC connection.
-func (c *Conn) LocalAddr() net.Addr { return c.conn.LocalAddr() }
+func (c *Conn) LocalAddr() net.Addr {
+	c.connStateMutex.Lock()
+	conn := c.conn
+	c.connStateMutex.Unlock()
+	return conn.LocalAddr()
+}
 
 // RemoteAddr returns the remote address of the QUIC connection.
-func (c *Conn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
+func (c *Conn) RemoteAddr() net.Addr {
+	c.connStateMutex.Lock()
+	conn := c.conn
+	c.connStateMutex.Unlock()
+	return conn.RemoteAddr()
+}
 
 // getPathManager lazily initializes the Conn's pathManagerOutgoing.
 // May create multiple pathManagerOutgoing objects if called concurrently.
