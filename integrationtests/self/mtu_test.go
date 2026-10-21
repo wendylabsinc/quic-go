@@ -179,7 +179,7 @@ func TestPathMTUDiscovery(t *testing.T) {
 	t.Logf("max server packet size: %d, MTU: %d", maxPacketSizeServer, mtu)
 
 	require.GreaterOrEqual(t, maxPacketSizeClient, mtu-25)
-	const maxDiff = 40 // this includes the 21 bytes for the short header, 16 bytes for the encryption tag, and framing overhead
+	const maxDiff = 44 // conservative reserve: 25-byte short header, 16-byte tag, 3-byte DATAGRAM framing
 	require.GreaterOrEqual(t, int(initialMaxDatagramSize), protocol.MinInitialPacketSize-maxDiff)
 	require.GreaterOrEqual(t, int(finalMaxDatagramSize), maxPacketSizeClient-maxDiff)
 	// MTU discovery was disabled on the server side
